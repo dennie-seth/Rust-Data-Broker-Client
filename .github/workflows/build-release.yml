@@ -70,17 +70,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }} 
           tag_name: v${{ steps.get_version.outputs.version }}-build-${{ github.run_number }}
           name: "DataBrokerClient v${{ steps.get_version.outputs.version }} (build ${{ github.run_number }})"
           body: |
-            Auto-generated release for commit ${{ github.sha }} on branch main.
-
-            Crate version: ${{ steps.get_version.outputs.version }}
-            GitHub Actions run: ${{ github.run_number }}
-
+            Auto-generated DataBrokerClient release for commit ${{ github.sha }} on branch main.
+            • Crate version: ${{ steps.get_version.outputs.version }}
+            • GitHub Actions run number: ${{ github.run_number }}
           files: |
-            dist/**/*.whl
-
+            dist/**/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
