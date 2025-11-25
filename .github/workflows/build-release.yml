@@ -3,7 +3,10 @@ name: DataBrokerClient – Build & Release wheels
 on:
   push:
     branches: [ main ]
-
+    
+permissions:
+  contents: write
+  
 jobs:
   build-wheels:
     name: Build wheels on ${{ matrix.os }} for Python ${{ matrix.python-version }}
@@ -67,6 +70,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }} 
           tag_name: v${{ steps.get_version.outputs.version }}-build-${{ github.run_number }}
           name: "DataBrokerClient v${{ steps.get_version.outputs.version }} (build ${{ github.run_number }})"
           body: |
@@ -77,5 +81,6 @@ jobs:
 
           files: |
             dist/**/*.whl
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
