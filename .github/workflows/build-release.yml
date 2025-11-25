@@ -36,7 +36,6 @@ jobs:
       - name: Build wheels
         run: |
           maturin build --release -m Cargo.toml
-        # если используешь pyproject.toml, можно без -m
 
       - name: Upload wheels as artifact
         uses: actions/upload-artifact@v4
@@ -77,6 +76,6 @@ jobs:
             • Crate version: ${{ steps.get_version.outputs.version }}
             • GitHub Actions run number: ${{ github.run_number }}
           files: |
-            dist/**/*.zip
+            dist/**/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
