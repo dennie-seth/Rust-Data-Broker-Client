@@ -3,5 +3,10 @@ name = "DataBrokerClient"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "data_broker_client"
+crate-type = ["cdylib"]
+
 [dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
+pyo3 = { version = "0.27.1", features = ["extension-module", "experimental-async"] }

@@ -22,13 +22,14 @@ async fn client_send(stream: &mut TcpStream) {
         if stream.write_all(line.as_bytes()).await.is_err() { break; }
     }
 }
-pub async fn client_connect() {
+pub async fn client_connect(url: String) -> Result<(), std::io::Error> {
     println!("Connecting to server...");
-    let stream = TcpStream::connect("127.0.0.1:8080").await;
+    let stream = TcpStream::connect(url).await;
     if stream.is_ok() {
         println!("Connected to server");
         let _ = tokio::spawn(async move {
             client_send(&mut stream.unwrap()).await;
-        }).await;
+        }).await?;
     }
+    Ok(())
 }
