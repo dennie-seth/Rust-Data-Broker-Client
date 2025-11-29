@@ -1,7 +1,7 @@
 ﻿use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-
+#[deprecated]
 async fn client_send(stream: &mut TcpStream) {
     let (sender, mut receiver) = mpsc::channel::<String>(32);
     tokio::spawn(async move { 
@@ -27,9 +27,9 @@ pub async fn client_connect(url: String) -> Result<(), std::io::Error> {
     let stream = TcpStream::connect(url).await;
     if stream.is_ok() {
         println!("Connected to server");
-        let _ = tokio::spawn(async move {
+        /*let _ = tokio::spawn(async move {
             client_send(&mut stream.unwrap()).await;
-        }).await?;
+        }).await?;*/
     }
     Ok(())
 }

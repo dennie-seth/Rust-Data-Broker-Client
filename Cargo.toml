@@ -1,6 +1,6 @@
 [package]
 name = "DataBrokerClient"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [lib]
@@ -9,4 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
-pyo3 = { version = "0.27.1", features = ["extension-module", "experimental-async"] }
+pyo3 = { version = "0.20.0", features = ["extension-module"] }
+pyo3-asyncio = { version = "0.20.0", features = ["tokio-runtime"] }
