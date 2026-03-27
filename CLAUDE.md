@@ -18,8 +18,10 @@ maturin build --release --skip-auditwheel -m Cargo.toml
 # Run tests
 cargo test
 
-# Run the binary demo
+# Run the binary demo (connects to default 127.0.0.1:8080)
 cargo run
+# Run with a custom address
+cargo run -- --address 192.168.1.5:9000
 ```
 
 ## Architecture
