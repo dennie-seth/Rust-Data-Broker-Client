@@ -1,7 +1,6 @@
-﻿use std::collections::HashSet;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::sync::Arc;
-use std::time::Duration;
 use pyo3::pyclass;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -41,14 +40,14 @@ impl Response {
 #[derive(Debug, Clone)]
 pub(crate) struct RequestMessage {
     command: Request,
-    payload_size: usize,
+    payload_size: u64, // server reads 8 bytes (u64 big-endian) for payload_size
     payload: Vec<u8>,
 }
 impl RequestMessage {
     pub(crate) fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = vec!();
         bytes.push(self.command.clone() as u8);
-        bytes.push(self.payload_size as u8);
+        bytes.extend_from_slice(&self.payload_size.to_be_bytes()); // 8 bytes big-endian to match server
         bytes.append(&mut self.payload.clone());
         bytes
     }
@@ -68,18 +67,11 @@ impl ResponseMessage {
         }
     }
 }
-async fn parse_message(buffer: &mut BytesMut) -> Result<ResponseMessage, std::io::Error> {
-    let message;
-    loop {
-        let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
-        if buffer.len() >= payload_size as usize + 9 {
-            message = ResponseMessage::new(Response::from_u8(buffer[0]),
-                                           u64::from_le_bytes(buffer[1..9].try_into().unwrap()),
-                                           buffer.split_to(payload_size as usize + 9).to_vec());
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+fn parse_message(buffer: &mut BytesMut) -> Result<ResponseMessage, std::io::Error> {
+    let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
+    let message = ResponseMessage::new(Response::from_u8(buffer[0]),
+                                       payload_size,
+                                       buffer.split_to(payload_size as usize + 9)[9..].to_vec());
     Ok(message)
 }
 impl BrokerClient {
@@ -96,7 +88,7 @@ impl BrokerClient {
                 self.files.lock().await.insert(path.clone());
                 let request_message = RequestMessage {
                     command: Request::Enqueue,
-                    payload_size: file.len(),
+                    payload_size: file.len() as u64,
                     payload: file,
                 };
                 if self.stream.lock().await.write_all(&request_message.as_bytes()).await.is_err() {
@@ -113,19 +105,22 @@ impl BrokerClient {
         loop {
             self.stream.lock().await.read_buf(&mut buffer).await?;
             if buffer.len() >= 9 {
-                match Response::from_u8(buffer[0]) {
-                    Response::Succeeded => {
-                        match parse_message(&mut buffer).await {
-                            Ok(response_message) => {
-                                println!("{:?}", response_message);
-                            }
-                            Err(err) => {
-                                return Err(std::io::Error::new(ErrorKind::Other, err.to_string()))?
+                let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
+                if buffer.len() >= payload_size as usize + 9 {
+                    match Response::from_u8(buffer[0]) {
+                        Response::Succeeded => {
+                            match parse_message(&mut buffer) {
+                                Ok(response_message) => {
+                                    println!("{:?}", response_message);
+                                }
+                                Err(err) => {
+                                    return Err(std::io::Error::new(ErrorKind::Other, err.to_string()))?
+                                }
                             }
                         }
-                    }
-                    Response::Failed => {
-                        return Err(std::io::Error::new(ErrorKind::Other, "response returned error"))?
+                        Response::Failed => {
+                            return Err(std::io::Error::new(ErrorKind::Other, "response returned error"))?
+                        }
                     }
                 }
             }

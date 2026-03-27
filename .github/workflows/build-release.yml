@@ -35,7 +35,7 @@ jobs:
 
       - name: Build wheels
         run: |
-          maturin build --release -m Cargo.toml
+          maturin build --release --skip-auditwheel -m Cargo.toml
 
       - name: Upload wheels as artifact
         uses: actions/upload-artifact@v4
