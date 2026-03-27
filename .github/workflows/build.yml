@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-wheels:
     name: Build wheels on ${{ matrix.os }} for Python ${{ matrix.python-version }}
