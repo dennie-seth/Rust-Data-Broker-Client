@@ -11,6 +11,7 @@ use bytes::BytesMut;
 pub struct BrokerClient {
     stream: Arc<Mutex<TcpStream>>,
     files: Arc<Mutex<HashSet<String>>>,
+    client_id: u128,
 }
 #[pyclass]
 pub struct PyBrokerClient {
@@ -21,6 +22,14 @@ pub struct PyBrokerClient {
 enum Request {
     Enqueue = 1,
     Dequeue = 2,
+    CreateQ = 3,
+    DeleteQ = 4,
+    PeekM = 5,
+    DeleteM = 6,
+    Succeeded = 7,
+    Failed = 8,
+    Requeue = 9,
+    UpdateM = 10,
 }
 #[repr(u8)]
 #[derive(Debug, Clone)]
@@ -37,18 +46,28 @@ impl Response {
         }
     }
 }
+/// Request frame: [1b command][16b client_id BE][8b payload_size BE][64b queue_name null-padded][payload]
 #[derive(Debug, Clone)]
 pub(crate) struct RequestMessage {
     command: Request,
-    payload_size: u64, // server reads 8 bytes (u64 big-endian) for payload_size
+    client_id: u128,
+    queue_name: String,
+    payload_size: u64,
     payload: Vec<u8>,
 }
 impl RequestMessage {
     pub(crate) fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec!();
+        let mut bytes = Vec::new();
         bytes.push(self.command.clone() as u8);
-        bytes.extend_from_slice(&self.payload_size.to_be_bytes()); // 8 bytes big-endian to match server
-        bytes.append(&mut self.payload.clone());
+        bytes.extend_from_slice(&self.client_id.to_be_bytes()); // 16 bytes big-endian
+        bytes.extend_from_slice(&self.payload_size.to_be_bytes()); // 8 bytes big-endian
+        // queue_name: null-padded to exactly 64 bytes
+        let name_bytes = self.queue_name.as_bytes();
+        let mut name_padded = [0u8; 64];
+        let len = name_bytes.len().min(64);
+        name_padded[..len].copy_from_slice(&name_bytes[..len]);
+        bytes.extend_from_slice(&name_padded);
+        bytes.extend_from_slice(&self.payload);
         bytes
     }
 }
@@ -79,15 +98,23 @@ impl BrokerClient {
         BrokerClient {
             stream: Arc::new(Mutex::new(stream)),
             files: Arc::new(Mutex::new(HashSet::new())),
+            client_id: {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+                let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                ((secs as u128) << 64) | (nanos as u128)
+            },
         }
     }
-    pub(crate) async fn send(self, path: &String) -> Result<(), std::io::Error> {
+    pub(crate) async fn send(self, path: &String, queue_name: &String) -> Result<(), std::io::Error> {
         if std::path::Path::new(path).exists() {
             let file = std::fs::read(path)?;
             if !file.is_empty() {
                 self.files.lock().await.insert(path.clone());
                 let request_message = RequestMessage {
                     command: Request::Enqueue,
+                    client_id: self.client_id,
+                    queue_name: queue_name.clone(),
                     payload_size: file.len() as u64,
                     payload: file,
                 };
@@ -127,11 +154,12 @@ impl BrokerClient {
         }
     }
 }
-pub async fn client_send(client: Arc<Mutex<BrokerClient>>, path: &String) -> Result<(), std::io::Error> {
+pub async fn client_send(client: Arc<Mutex<BrokerClient>>, path: &String, queue_name: &String) -> Result<(), std::io::Error> {
     let client_sender = client.lock().await.clone();
     let path = path.clone();
+    let queue_name = queue_name.clone();
     tokio::spawn(async move{
-        match client_sender.clone().send(&path).await {
+        match client_sender.clone().send(&path, &queue_name).await {
             Ok(_) => {}
             Err(err) => {
                 println!("{}", err);
