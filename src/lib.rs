@@ -1,9 +1,9 @@
-﻿use std::sync::OnceLock;
+use std::sync::OnceLock;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3_asyncio::tokio::init_with_runtime;
 use tokio::runtime::Runtime;
-use crate::net::client::{client_connect, client_send, PyBrokerClient};
+use crate::net::client::{client_connect, client_send, PyBrokerClient, MessageMeta, parse_peek_response, parse_dequeue_response};
 mod net;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -34,7 +34,32 @@ unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, command: u8, paylo
     let client = client.client.clone();
     pyo3_asyncio::tokio::future_into_py(py, async move {
         match client_send(client, command, payload, &queue_name).await {
-            Ok(response) => Ok(response),
+            Ok(response) => {
+                Python::with_gil(|py| {
+                    match command {
+                        // PeekM - return list of MessageMeta
+                        5 => {
+                            let metas = parse_peek_response(&response);
+                            let py_list: Vec<PyObject> = metas.into_iter()
+                                .map(|m| Py::new(py, m).unwrap().into_py(py))
+                                .collect();
+                            Ok(py_list.into_py(py))
+                        }
+                        // Dequeue - return (MessageMeta, bytes)
+                        2 => {
+                            if response.len() < 56 {
+                                return Ok(response.into_py(py));
+                            }
+                            let (meta, data) = parse_dequeue_response(&response);
+                            let py_meta = Py::new(py, meta).unwrap();
+                            let py_tuple = (py_meta, data).into_py(py);
+                            Ok(py_tuple)
+                        }
+                        // Everything else - return raw bytes
+                        _ => Ok(response.into_py(py)),
+                    }
+                })
+            }
             Err(err) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("failed to send, {err}"))),
         }
     })
@@ -43,6 +68,7 @@ unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, command: u8, paylo
 fn data_broker_client(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let rt: &'static Runtime = get_runtime();
     let _ = init_with_runtime(rt);
+    m.add_class::<MessageMeta>()?;
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(send, m)?)?;
     Ok(())

@@ -35,7 +35,12 @@ cargo run -- --address 192.168.1.5:9000
 **Core Client (`src/net/client.rs`)**
 - `BrokerClient`: wraps a TCP stream and a `client_id: u128`; wrapped in `Arc<Mutex<>>` for thread safety
 - `PyBrokerClient`: thin PyO3-visible wrapper around `BrokerClient`
+- `MessageMeta`: PyO3-visible struct with fields `id: u128`, `publisher_id: u128`, `timestamp: u64`, `locked_by: Option<u128>` — parsed from the server's 56-byte Meta format (big-endian, `u128::MAX` → `None` for `locked_by`)
 - `client_send()` sends a request (any command) with a `Vec<u8>` payload, then awaits and returns the server's response payload as `Vec<u8>`
+- Response parsing varies by command:
+  - **Dequeue (2)**: returns `tuple(MessageMeta, bytes)` — meta separated from payload
+  - **PeekM (5)**: returns `list[MessageMeta]` — one entry per 56-byte chunk
+  - **All others**: returns raw `bytes`
 - Binary protocol (big-endian, matches DataBroker server):
   - Request: `[1 byte command][16 bytes client_id u128 BE][8 bytes payload_size u64 BE][64 bytes queue_name null-padded][payload]`
   - Response: `[1 byte status][8 bytes payload_size u64 BE][payload]`
