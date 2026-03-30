@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use pyo3::pyclass;
@@ -10,7 +9,6 @@ use bytes::BytesMut;
 #[derive(Debug, Clone)]
 pub struct BrokerClient {
     stream: Arc<Mutex<TcpStream>>,
-    files: Arc<Mutex<HashSet<String>>>,
     client_id: u128,
 }
 #[pyclass]
@@ -19,7 +17,7 @@ pub struct PyBrokerClient {
 }
 #[repr(u8)]
 #[derive(Debug, Clone)]
-enum Request {
+pub enum Request {
     Enqueue = 1,
     Dequeue = 2,
     CreateQ = 3,
@@ -30,6 +28,23 @@ enum Request {
     Failed = 8,
     Requeue = 9,
     UpdateM = 10,
+}
+impl Request {
+    pub fn from_u8(value: u8) -> Result<Self, std::io::Error> {
+        match value {
+            1 => Ok(Request::Enqueue),
+            2 => Ok(Request::Dequeue),
+            3 => Ok(Request::CreateQ),
+            4 => Ok(Request::DeleteQ),
+            5 => Ok(Request::PeekM),
+            6 => Ok(Request::DeleteM),
+            7 => Ok(Request::Succeeded),
+            8 => Ok(Request::Failed),
+            9 => Ok(Request::Requeue),
+            10 => Ok(Request::UpdateM),
+            _ => Err(std::io::Error::new(ErrorKind::InvalidInput, format!("unknown command: {}", value))),
+        }
+    }
 }
 #[repr(u8)]
 #[derive(Debug, Clone)]
@@ -97,7 +112,6 @@ impl BrokerClient {
     pub(crate) fn new(stream: TcpStream) -> BrokerClient {
         BrokerClient {
             stream: Arc::new(Mutex::new(stream)),
-            files: Arc::new(Mutex::new(HashSet::new())),
             client_id: {
                 use std::time::{SystemTime, UNIX_EPOCH};
                 let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
@@ -106,28 +120,20 @@ impl BrokerClient {
             },
         }
     }
-    pub(crate) async fn send(self, path: &String, queue_name: &String) -> Result<(), std::io::Error> {
-        if std::path::Path::new(path).exists() {
-            let file = std::fs::read(path)?;
-            if !file.is_empty() {
-                self.files.lock().await.insert(path.clone());
-                let request_message = RequestMessage {
-                    command: Request::Enqueue,
-                    client_id: self.client_id,
-                    queue_name: queue_name.clone(),
-                    payload_size: file.len() as u64,
-                    payload: file,
-                };
-                if self.stream.lock().await.write_all(&request_message.as_bytes()).await.is_err() {
-                    return Err(std::io::Error::new(ErrorKind::Other, "failed to send"))?
-                }
-                return Ok(())
-            }
-            Err(std::io::Error::new(ErrorKind::Other, "file is empty"))?
+    pub(crate) async fn send(self, command: Request, payload: Vec<u8>, queue_name: &String) -> Result<(), std::io::Error> {
+        let request_message = RequestMessage {
+            command,
+            client_id: self.client_id,
+            queue_name: queue_name.clone(),
+            payload_size: payload.len() as u64,
+            payload,
+        };
+        if self.stream.lock().await.write_all(&request_message.as_bytes()).await.is_err() {
+            return Err(std::io::Error::new(ErrorKind::Other, "failed to send"))?
         }
-        Err(std::io::Error::new(ErrorKind::NotFound, "file not found"))?
+        Ok(())
     }
-    pub(crate) async fn receive(self) -> Result<(), std::io::Error> {
+    pub(crate) async fn receive(self) -> Result<Vec<u8>, std::io::Error> {
         let mut buffer = BytesMut::with_capacity(1024*4);
         loop {
             self.stream.lock().await.read_buf(&mut buffer).await?;
@@ -136,17 +142,14 @@ impl BrokerClient {
                 if buffer.len() >= payload_size as usize + 9 {
                     match Response::from_u8(buffer[0]) {
                         Response::Succeeded => {
-                            match parse_message(&mut buffer) {
-                                Ok(response_message) => {
-                                    println!("{:?}", response_message);
-                                }
-                                Err(err) => {
-                                    return Err(std::io::Error::new(ErrorKind::Other, err.to_string()))?
-                                }
-                            }
+                            let response = parse_message(&mut buffer)?;
+                            return Ok(response.payload);
                         }
                         Response::Failed => {
-                            return Err(std::io::Error::new(ErrorKind::Other, "response returned error"))?
+                            let response = parse_message(&mut buffer)?;
+                            let msg = String::from_utf8(response.payload)
+                                .unwrap_or_else(|_| "response returned error".to_string());
+                            return Err(std::io::Error::new(ErrorKind::Other, msg));
                         }
                     }
                 }
@@ -154,28 +157,11 @@ impl BrokerClient {
         }
     }
 }
-pub async fn client_send(client: Arc<Mutex<BrokerClient>>, path: &String, queue_name: &String) -> Result<(), std::io::Error> {
-    let client_sender = client.lock().await.clone();
-    let path = path.clone();
-    let queue_name = queue_name.clone();
-    tokio::spawn(async move{
-        match client_sender.clone().send(&path, &queue_name).await {
-            Ok(_) => {}
-            Err(err) => {
-                println!("{}", err);
-            }
-        }
-    });
-    let client_receiver = client.lock().await.clone();
-    tokio::spawn(async move {
-        match client_receiver.clone().receive().await {
-            Ok(_) => {}
-            Err(err) => {
-                println!("{}", err);
-            }
-        }
-    });
-    Ok(())
+pub async fn client_send(client: Arc<Mutex<BrokerClient>>, command: u8, payload: Vec<u8>, queue_name: &String) -> Result<Vec<u8>, std::io::Error> {
+    let command = Request::from_u8(command)?;
+    let broker = client.lock().await.clone();
+    broker.clone().send(command, payload, queue_name).await?;
+    broker.receive().await
 }
 pub async fn client_connect(url: String) -> Result<Arc<Mutex<BrokerClient>>, std::io::Error> {
     println!("Connecting to server...");

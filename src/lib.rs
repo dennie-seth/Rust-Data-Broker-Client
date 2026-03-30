@@ -30,11 +30,11 @@ unsafe fn connect(py: Python<'_>, url: String) -> PyResult<&PyAny> {
     })
 }
 #[pyfunction]
-unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, path: String, queue_name: String) -> PyResult<&'py PyAny> {
+unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, command: u8, payload: Vec<u8>, queue_name: String) -> PyResult<&'py PyAny> {
     let client = client.client.clone();
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        match client_send(client, &path, &queue_name).await {
-            Ok(_) => Ok(()),
+        match client_send(client, command, payload, &queue_name).await {
+            Ok(response) => Ok(response),
             Err(err) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("failed to send, {err}"))),
         }
     })
