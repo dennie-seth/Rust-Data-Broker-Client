@@ -1,10 +1,13 @@
 use std::io::ErrorKind;
 use std::sync::Arc;
+use pyo3::prelude::*;
 use pyo3::pyclass;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex};
 use bytes::BytesMut;
+
+const META_SIZE: usize = 56;
 
 #[derive(Debug, Clone)]
 pub struct BrokerClient {
@@ -14,6 +17,38 @@ pub struct BrokerClient {
 #[pyclass]
 pub struct PyBrokerClient {
     pub client: Arc<Mutex<BrokerClient>>,
+}
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct MessageMeta {
+    #[pyo3(get)]
+    pub id: u128,
+    #[pyo3(get)]
+    pub publisher_id: u128,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub locked_by: Option<u128>,
+}
+impl MessageMeta {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let id = u128::from_be_bytes(bytes[0..16].try_into().unwrap());
+        let publisher_id = u128::from_be_bytes(bytes[16..32].try_into().unwrap());
+        let timestamp = u64::from_be_bytes(bytes[32..40].try_into().unwrap());
+        let locked_raw = u128::from_be_bytes(bytes[40..56].try_into().unwrap());
+        let locked_by = if locked_raw == u128::MAX { None } else { Some(locked_raw) };
+        MessageMeta { id, publisher_id, timestamp, locked_by }
+    }
+}
+pub fn parse_peek_response(payload: &[u8]) -> Vec<MessageMeta> {
+    payload.chunks_exact(META_SIZE)
+        .map(MessageMeta::from_bytes)
+        .collect()
+}
+pub fn parse_dequeue_response(payload: &[u8]) -> (MessageMeta, Vec<u8>) {
+    let meta = MessageMeta::from_bytes(&payload[..META_SIZE]);
+    let data = payload[META_SIZE..].to_vec();
+    (meta, data)
 }
 #[repr(u8)]
 #[derive(Debug, Clone)]
