@@ -40,7 +40,7 @@ impl MessageMeta {
         MessageMeta { id, publisher_id, timestamp, locked_by }
     }
 }
-pub fn parse_peek_response(payload: &[u8]) -> Vec<MessageMeta> {
+pub fn parse_list_response(payload: &[u8]) -> Vec<MessageMeta> {
     payload.chunks_exact(META_SIZE)
         .map(MessageMeta::from_bytes)
         .collect()
@@ -57,7 +57,7 @@ pub enum Request {
     Dequeue = 2,
     CreateQ = 3,
     DeleteQ = 4,
-    PeekM = 5,
+    ListM = 5,
     DeleteM = 6,
     Succeeded = 7,
     Failed = 8,
@@ -71,7 +71,7 @@ impl Request {
             2 => Ok(Request::Dequeue),
             3 => Ok(Request::CreateQ),
             4 => Ok(Request::DeleteQ),
-            5 => Ok(Request::PeekM),
+            5 => Ok(Request::ListM),
             6 => Ok(Request::DeleteM),
             7 => Ok(Request::Succeeded),
             8 => Ok(Request::Failed),
@@ -88,11 +88,11 @@ enum Response {
     Failed = 2,
 }
 impl Response {
-    pub(crate) fn from_u8(value: u8) -> Self {
+    pub(crate) fn from_u8(value: u8) -> Result<Self, std::io::Error> {
         match value {
-            1 => Response::Succeeded,
-            2 => Response::Failed,
-            _ => unimplemented!(),
+            1 => Ok(Response::Succeeded),
+            2 => Ok(Response::Failed),
+            _ => Err(std::io::Error::new(ErrorKind::InvalidData, format!("unknown response status: {}", value))),
         }
     }
 }
@@ -138,7 +138,7 @@ impl ResponseMessage {
 }
 fn parse_message(buffer: &mut BytesMut) -> Result<ResponseMessage, std::io::Error> {
     let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
-    let message = ResponseMessage::new(Response::from_u8(buffer[0]),
+    let message = ResponseMessage::new(Response::from_u8(buffer[0])?,
                                        payload_size,
                                        buffer.split_to(payload_size as usize + 9)[9..].to_vec());
     Ok(message)
@@ -149,9 +149,8 @@ impl BrokerClient {
             stream: Arc::new(Mutex::new(stream)),
             client_id: {
                 use std::time::{SystemTime, UNIX_EPOCH};
-                let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
-                let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                ((secs as u128) << 64) | (nanos as u128)
+                let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+                ((duration.as_secs() as u128) << 64) | (duration.subsec_nanos() as u128)
             },
         }
     }
@@ -163,19 +162,20 @@ impl BrokerClient {
             payload_size: payload.len() as u64,
             payload,
         };
-        if self.stream.lock().await.write_all(&request_message.as_bytes()).await.is_err() {
-            return Err(std::io::Error::new(ErrorKind::Other, "failed to send"))?
-        }
+        self.stream.lock().await.write_all(&request_message.as_bytes()).await?;
         Ok(())
     }
     pub(crate) async fn receive(self) -> Result<Vec<u8>, std::io::Error> {
         let mut buffer = BytesMut::with_capacity(1024*4);
         loop {
-            self.stream.lock().await.read_buf(&mut buffer).await?;
+            let n = self.stream.lock().await.read_buf(&mut buffer).await?;
+            if n == 0 {
+                return Err(std::io::Error::new(ErrorKind::UnexpectedEof, "server closed connection"));
+            }
             if buffer.len() >= 9 {
                 let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
                 if buffer.len() >= payload_size as usize + 9 {
-                    match Response::from_u8(buffer[0]) {
+                    match Response::from_u8(buffer[0])? {
                         Response::Succeeded => {
                             let response = parse_message(&mut buffer)?;
                             return Ok(response.payload);
@@ -194,17 +194,18 @@ impl BrokerClient {
 }
 pub async fn client_send(client: Arc<Mutex<BrokerClient>>, command: u8, payload: Vec<u8>, queue_name: &String) -> Result<Vec<u8>, std::io::Error> {
     let command = Request::from_u8(command)?;
-    let broker = client.lock().await.clone();
-    broker.clone().send(command, payload, queue_name).await?;
-    broker.receive().await
+    let broker = client.lock().await;
+    let inner = broker.clone();
+    inner.clone().send(command, payload, queue_name).await?;
+    inner.receive().await
 }
 pub async fn client_connect(url: String) -> Result<Arc<Mutex<BrokerClient>>, std::io::Error> {
     println!("Connecting to server...");
-    let stream = TcpStream::connect(url).await;
-    if stream.is_ok() {
-        println!("Connected to server");
-        let broker_client = Arc::new(Mutex::new(BrokerClient::new(stream?)));
-        return Ok(broker_client)
+    match TcpStream::connect(url).await {
+        Ok(stream) => {
+            println!("Connected to server");
+            Ok(Arc::new(Mutex::new(BrokerClient::new(stream))))
+        }
+        Err(err) => Err(std::io::Error::new(ErrorKind::Other, format!("failed to connect: {err}")))
     }
-    Err(std::io::Error::new(ErrorKind::Other, "failed to connect"))?
 }
