@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3_asyncio::tokio::init_with_runtime;
 use tokio::runtime::Runtime;
-use crate::net::client::{client_connect, client_send, PyBrokerClient, MessageMeta, parse_peek_response, parse_dequeue_response};
+use crate::net::client::{client_connect, client_send, PyBrokerClient, MessageMeta, parse_list_response, parse_dequeue_response};
 mod net;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -37,9 +37,9 @@ unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, command: u8, paylo
             Ok(response) => {
                 Python::with_gil(|py| {
                     match command {
-                        // PeekM - return list of MessageMeta
+                        // ListM - return list of MessageMeta
                         5 => {
-                            let metas = parse_peek_response(&response);
+                            let metas = parse_list_response(&response);
                             let py_list: Vec<PyObject> = metas.into_iter()
                                 .map(|m| Py::new(py, m).unwrap().into_py(py))
                                 .collect();
