@@ -45,10 +45,13 @@ pub fn parse_list_response(payload: &[u8]) -> Vec<MessageMeta> {
         .map(MessageMeta::from_bytes)
         .collect()
 }
-pub fn parse_dequeue_response(payload: &[u8]) -> (MessageMeta, Vec<u8>) {
+pub fn parse_dequeue_response(payload: &[u8]) -> Result<(MessageMeta, Vec<u8>), std::io::Error> {
+    if payload.len() < META_SIZE {
+        return Err(std::io::Error::new(ErrorKind::InvalidData, "dequeue response too short for meta"));
+    }
     let meta = MessageMeta::from_bytes(&payload[..META_SIZE]);
     let data = payload[META_SIZE..].to_vec();
-    (meta, data)
+    Ok((meta, data))
 }
 #[repr(u8)]
 #[derive(Debug, Clone)]
@@ -63,6 +66,7 @@ pub enum Request {
     Failed = 8,
     Requeue = 9,
     UpdateM = 10,
+    UpdateQ = 11,
 }
 impl Request {
     pub fn from_u8(value: u8) -> Result<Self, std::io::Error> {
@@ -77,6 +81,7 @@ impl Request {
             8 => Ok(Request::Failed),
             9 => Ok(Request::Requeue),
             10 => Ok(Request::UpdateM),
+            11 => Ok(Request::UpdateQ),
             _ => Err(std::io::Error::new(ErrorKind::InvalidInput, format!("unknown command: {}", value))),
         }
     }
@@ -154,7 +159,7 @@ impl BrokerClient {
             },
         }
     }
-    pub(crate) async fn send(self, command: Request, payload: Vec<u8>, queue_name: &String) -> Result<(), std::io::Error> {
+    pub(crate) async fn send(&self, command: Request, payload: Vec<u8>, queue_name: &String) -> Result<(), std::io::Error> {
         let request_message = RequestMessage {
             command,
             client_id: self.client_id,
@@ -165,7 +170,7 @@ impl BrokerClient {
         self.stream.lock().await.write_all(&request_message.as_bytes()).await?;
         Ok(())
     }
-    pub(crate) async fn receive(self) -> Result<Vec<u8>, std::io::Error> {
+    pub(crate) async fn receive(&self) -> Result<Vec<u8>, std::io::Error> {
         let mut buffer = BytesMut::with_capacity(1024*4);
         loop {
             let n = self.stream.lock().await.read_buf(&mut buffer).await?;
@@ -195,9 +200,8 @@ impl BrokerClient {
 pub async fn client_send(client: Arc<Mutex<BrokerClient>>, command: u8, payload: Vec<u8>, queue_name: &String) -> Result<Vec<u8>, std::io::Error> {
     let command = Request::from_u8(command)?;
     let broker = client.lock().await;
-    let inner = broker.clone();
-    inner.clone().send(command, payload, queue_name).await?;
-    inner.receive().await
+    broker.send(command, payload, queue_name).await?;
+    broker.receive().await
 }
 pub async fn client_connect(url: String) -> Result<Arc<Mutex<BrokerClient>>, std::io::Error> {
     println!("Connecting to server...");

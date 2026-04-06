@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- `UpdateQ` command (11) — matches the server's queue-config update command. Payload is a `NetQueueConfig` binary blob (flags byte + optional `auto_fail` bool + optional `fail_timeout` u64 BE).
+
+### Fixed
+- `BrokerClient::send` and `receive` now take `&self` instead of consuming `self`, eliminating unnecessary clones in `client_send`.
+- `parse_dequeue_response` now validates payload length (>= 56 bytes) and returns `Result` instead of panicking on short responses.
+- `client_send` no longer clones `BrokerClient`; it borrows through the held mutex guard.
+
 ### Breaking Changes
 - `send(client, path)` → `send(client, path, queue_name)`: Python callers must now pass the target queue name as a third argument.
 - Request frame format updated to match DataBroker server protocol. Old frame: `[1b cmd][8b payload_size][payload]`. New frame: `[1b cmd][16b client_id][8b payload_size][64b queue_name][payload]`.
