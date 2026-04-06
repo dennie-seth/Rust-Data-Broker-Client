@@ -44,7 +44,7 @@ cargo run -- --address 192.168.1.5:9000
 - Binary protocol (big-endian, matches DataBroker server):
   - Request: `[1 byte command][16 bytes client_id u128 BE][8 bytes payload_size u64 BE][64 bytes queue_name null-padded][payload]`
   - Response: `[1 byte status][8 bytes payload_size u64 BE][payload]`
-  - Request commands: `Enqueue = 1`, `Dequeue = 2`, `CreateQ = 3`, `DeleteQ = 4`, `ListM = 5`, `DeleteM = 6`, `Succeeded = 7`, `Failed = 8`, `Requeue = 9`, `UpdateM = 10`
+  - Request commands: `Enqueue = 1`, `Dequeue = 2`, `CreateQ = 3`, `DeleteQ = 4`, `ListM = 5`, `DeleteM = 6`, `Succeeded = 7`, `Failed = 8`, `Requeue = 9`, `UpdateM = 10`, `UpdateQ = 11`
   - Response codes: `Succeeded = 1`, `Failed = 2`
 - `client_id` is generated at connect time from the system clock (secs << 64 | subsec_nanos)
 - `receive()` guards `buffer.len() >= 9 + payload_size` before calling `parse_message`, so `parse_message` always has a complete frame in the buffer
