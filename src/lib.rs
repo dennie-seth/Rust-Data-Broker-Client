@@ -25,7 +25,7 @@ unsafe fn connect(py: Python<'_>, url: String) -> PyResult<&PyAny> {
                     Py::new(py, py_client).map_err(Into::into)
                 })
             }
-            Err(_) => Err(pyo3::exceptions::PyRuntimeError::new_err("connection failed")),
+            Err(err) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("connection failed: {err}"))),
         }
     })
 }
@@ -53,7 +53,7 @@ unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, command: u8, paylo
                                     let py_tuple = (py_meta, data).into_py(py);
                                     Ok(py_tuple)
                                 }
-                                Err(_) => Ok(response.into_py(py)),
+                                Err(err) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("dequeue parse failed: {err}"))),
                             }
                         }
                         // Everything else - return raw bytes
