@@ -37,6 +37,7 @@ cargo run -- --address 192.168.1.5:9000
 - `PyBrokerClient`: thin PyO3-visible wrapper around `BrokerClient`
 - `MessageMeta`: PyO3-visible struct with fields `id: u128`, `publisher_id: u128`, `timestamp: u64`, `locked_by: Option<u128>` — parsed from the server's 56-byte Meta format (big-endian, `u128::MAX` → `None` for `locked_by`)
 - `client_send()` sends a request (any command) with a `Vec<u8>` payload, then awaits and returns the server's response payload as `Vec<u8>`
+- Failed responses are parsed as 2-byte big-endian `u16` error codes matching the server's `ErrorCode` enum, and converted to human-readable error messages via `error_code_message()`
 - Response parsing varies by command:
   - **Dequeue (2)**: returns `tuple(MessageMeta, bytes)` — meta separated from payload
   - **ListM (5)**: returns `list[MessageMeta]` — one entry per 56-byte chunk
@@ -47,7 +48,9 @@ cargo run -- --address 192.168.1.5:9000
   - Request commands: `Enqueue = 1`, `Dequeue = 2`, `CreateQ = 3`, `DeleteQ = 4`, `ListM = 5`, `DeleteM = 6`, `Succeeded = 7`, `Failed = 8`, `Requeue = 9`, `UpdateM = 10`, `UpdateQ = 11`
   - Response codes: `Succeeded = 1`, `Failed = 2`
 - `client_id` is generated at connect time from the system clock (secs << 64 | subsec_nanos)
-- `receive()` guards `buffer.len() >= 9 + payload_size` before calling `parse_message`, so `parse_message` always has a complete frame in the buffer
+- `receive()` holds the stream lock for the entire read loop (not per-iteration) and guards `buffer.len() >= 9 + payload_size` before calling `parse_message`
+- `payload_size` is converted from `u64` to `usize` via `try_into()` with overflow checks, safe on both 32-bit and 64-bit platforms
+- Queue names are validated to not exceed 64 bytes before sending
 
 **CI/CD (`.github/workflows/`)**
 - `build.yml`: builds wheels for Python 3.10/3.11/3.12 on Ubuntu and Windows on every push/PR
