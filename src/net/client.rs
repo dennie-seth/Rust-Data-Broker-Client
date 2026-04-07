@@ -141,11 +141,47 @@ impl ResponseMessage {
         }
     }
 }
+fn error_code_message(code: u16) -> &'static str {
+    match code {
+        0   => "unknown request type",
+        1   => "failed to parse request message",
+        2   => "failed to send response",
+        3   => "payload exceeds maximum size",
+        100 => "queue hash not found",
+        101 => "queue not found",
+        102 => "queue already exists",
+        103 => "queue does not exist",
+        104 => "queue is empty",
+        200 => "payload missing message id",
+        201 => "no such message id",
+        202 => "message already locked",
+        203 => "no such message id locked",
+        204 => "message not locked by client",
+        205 => "message not in queue",
+        300 => "invalid config payload size",
+        301 => "config bytes empty",
+        302 => "invalid config auto_fail",
+        303 => "invalid config fail_timeout",
+        _   => "unknown error",
+    }
+}
+fn parse_error_payload(payload: &[u8]) -> String {
+    if payload.len() >= 2 {
+        let code = u16::from_be_bytes([payload[0], payload[1]]);
+        format!("server error {}: {}", code, error_code_message(code))
+    } else {
+        "server returned error with no details".to_string()
+    }
+}
 fn parse_message(buffer: &mut BytesMut) -> Result<ResponseMessage, std::io::Error> {
     let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
+    let payload_len: usize = payload_size.try_into()
+        .map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "payload size exceeds platform limit"))?;
+    let total = payload_len.checked_add(9)
+        .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "payload size overflow"))?;
     let message = ResponseMessage::new(Response::from_u8(buffer[0])?,
                                        payload_size,
-                                       buffer.split_to(payload_size as usize + 9)[9..].to_vec());
+                                       buffer.split_to(total)[9..].to_vec());
     Ok(message)
 }
 impl BrokerClient {
@@ -159,11 +195,14 @@ impl BrokerClient {
             },
         }
     }
-    pub(crate) async fn send(&self, command: Request, payload: Vec<u8>, queue_name: &String) -> Result<(), std::io::Error> {
+    pub(crate) async fn send(&self, command: Request, payload: Vec<u8>, queue_name: &str) -> Result<(), std::io::Error> {
+        if queue_name.len() > 64 {
+            return Err(std::io::Error::new(ErrorKind::InvalidInput, "queue name exceeds 64 bytes"));
+        }
         let request_message = RequestMessage {
             command,
             client_id: self.client_id,
-            queue_name: queue_name.clone(),
+            queue_name: queue_name.to_string(),
             payload_size: payload.len() as u64,
             payload,
         };
@@ -172,14 +211,19 @@ impl BrokerClient {
     }
     pub(crate) async fn receive(&self) -> Result<Vec<u8>, std::io::Error> {
         let mut buffer = BytesMut::with_capacity(1024*4);
+        let mut stream = self.stream.lock().await;
         loop {
-            let n = self.stream.lock().await.read_buf(&mut buffer).await?;
+            let n = stream.read_buf(&mut buffer).await?;
             if n == 0 {
                 return Err(std::io::Error::new(ErrorKind::UnexpectedEof, "server closed connection"));
             }
             if buffer.len() >= 9 {
                 let payload_size = u64::from_be_bytes(buffer[1..9].try_into().unwrap());
-                if buffer.len() >= payload_size as usize + 9 {
+                let payload_len: usize = payload_size.try_into()
+                    .map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "payload size exceeds platform limit"))?;
+                let total = payload_len.checked_add(9)
+                    .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "payload size overflow"))?;
+                if buffer.len() >= total {
                     match Response::from_u8(buffer[0])? {
                         Response::Succeeded => {
                             let response = parse_message(&mut buffer)?;
@@ -187,8 +231,7 @@ impl BrokerClient {
                         }
                         Response::Failed => {
                             let response = parse_message(&mut buffer)?;
-                            let msg = String::from_utf8(response.payload)
-                                .unwrap_or_else(|_| "response returned error".to_string());
+                            let msg = parse_error_payload(&response.payload);
                             return Err(std::io::Error::new(ErrorKind::Other, msg));
                         }
                     }
@@ -197,7 +240,7 @@ impl BrokerClient {
         }
     }
 }
-pub async fn client_send(client: Arc<Mutex<BrokerClient>>, command: u8, payload: Vec<u8>, queue_name: &String) -> Result<Vec<u8>, std::io::Error> {
+pub async fn client_send(client: Arc<Mutex<BrokerClient>>, command: u8, payload: Vec<u8>, queue_name: &str) -> Result<Vec<u8>, std::io::Error> {
     let command = Request::from_u8(command)?;
     let broker = client.lock().await;
     broker.send(command, payload, queue_name).await?;
