@@ -36,16 +36,18 @@ cargo run -- --address 192.168.1.5:9000
 - `BrokerClient`: wraps a TCP stream and a `client_id: u128`; wrapped in `Arc<Mutex<>>` for thread safety
 - `PyBrokerClient`: thin PyO3-visible wrapper around `BrokerClient`
 - `MessageMeta`: PyO3-visible struct with fields `id: u128`, `publisher_id: u128`, `timestamp: u64`, `locked_by: Option<u128>` — parsed from the server's 56-byte Meta format (big-endian, `u128::MAX` → `None` for `locked_by`)
+- `QueueStat`: PyO3-visible struct with fields `queue_name: String`, `total_messages: u64`, `total_bytes: u64`, `total_messages_locked: u64`, `total_bytes_locked: u64` — parsed from the server's `NetStats` response (nested `[u32 count][{u32 stat_len}{u16 name_len}{name}{4×u64 counters}]` layout, all big-endian)
 - `client_send()` sends a request (any command) with a `Vec<u8>` payload, then awaits and returns the server's response payload as `Vec<u8>`
 - Failed responses are parsed as 2-byte big-endian `u16` error codes matching the server's `ErrorCode` enum, and converted to human-readable error messages via `error_code_message()`
 - Response parsing varies by command:
   - **Dequeue (2)**: returns `tuple(MessageMeta, bytes)` — meta separated from payload
   - **ListM (5)**: returns `list[MessageMeta]` — one entry per 56-byte chunk
+  - **NetStats (12)**: returns `list[QueueStat]` — one entry per queue
   - **All others**: returns raw `bytes`
 - Binary protocol (big-endian, matches DataBroker server):
   - Request: `[1 byte command][16 bytes client_id u128 BE][8 bytes payload_size u64 BE][64 bytes queue_name null-padded][payload]`
   - Response: `[1 byte status][8 bytes payload_size u64 BE][payload]`
-  - Request commands: `Enqueue = 1`, `Dequeue = 2`, `CreateQ = 3`, `DeleteQ = 4`, `ListM = 5`, `DeleteM = 6`, `Succeeded = 7`, `Failed = 8`, `Requeue = 9`, `UpdateM = 10`, `UpdateQ = 11`
+  - Request commands: `Enqueue = 1`, `Dequeue = 2`, `CreateQ = 3`, `DeleteQ = 4`, `ListM = 5`, `DeleteM = 6`, `Succeeded = 7`, `Failed = 8`, `Requeue = 9`, `UpdateM = 10`, `UpdateQ = 11`, `NetStats = 12`
   - Response codes: `Succeeded = 1`, `Failed = 2`
 - `client_id` is generated at connect time from the system clock (secs << 64 | subsec_nanos)
 - `receive()` holds the stream lock for the entire read loop (not per-iteration) and guards `buffer.len() >= 9 + payload_size` before calling `parse_message`

@@ -40,6 +40,20 @@ impl MessageMeta {
         MessageMeta { id, publisher_id, timestamp, locked_by }
     }
 }
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct QueueStat {
+    #[pyo3(get)]
+    pub queue_name: String,
+    #[pyo3(get)]
+    pub total_messages: u64,
+    #[pyo3(get)]
+    pub total_bytes: u64,
+    #[pyo3(get)]
+    pub total_messages_locked: u64,
+    #[pyo3(get)]
+    pub total_bytes_locked: u64,
+}
 pub fn parse_list_response(payload: &[u8]) -> Vec<MessageMeta> {
     payload.chunks_exact(META_SIZE)
         .map(MessageMeta::from_bytes)
@@ -52,6 +66,48 @@ pub fn parse_dequeue_response(payload: &[u8]) -> Result<(MessageMeta, Vec<u8>), 
     let meta = MessageMeta::from_bytes(&payload[..META_SIZE]);
     let data = payload[META_SIZE..].to_vec();
     Ok((meta, data))
+}
+/// Parse NetStats response. Layout (big-endian):
+///   [4b count u32][for each stat: [4b length u32][stat bytes]]
+/// stat bytes layout:
+///   [2b name_len u16][name bytes][8b total_messages][8b total_bytes]
+///   [8b total_messages_locked][8b total_bytes_locked]
+/// The server writes the four counters via `usize::to_be_bytes()`; on the 64-bit
+/// Linux/Windows targets the server ships for, `usize` is 8 bytes.
+pub fn parse_stats_response(payload: &[u8]) -> Result<Vec<QueueStat>, std::io::Error> {
+    let short = || std::io::Error::new(ErrorKind::InvalidData, "stats response truncated");
+    if payload.len() < 4 { return Err(short()); }
+    let count = u32::from_be_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let mut offset = 4usize;
+    let mut stats = Vec::with_capacity(count);
+    for _ in 0..count {
+        if offset + 4 > payload.len() { return Err(short()); }
+        let stat_len = u32::from_be_bytes(payload[offset..offset+4].try_into().unwrap()) as usize;
+        offset += 4;
+        if offset + stat_len > payload.len() { return Err(short()); }
+        let stat = &payload[offset..offset+stat_len];
+        offset += stat_len;
+
+        if stat.len() < 2 { return Err(short()); }
+        let name_len = u16::from_be_bytes(stat[0..2].try_into().unwrap()) as usize;
+        let mut p = 2usize;
+        if p + name_len + 32 > stat.len() { return Err(short()); }
+        let queue_name = String::from_utf8(stat[p..p+name_len].to_vec())
+            .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, format!("invalid utf-8 in queue name: {e}")))?;
+        p += name_len;
+        let total_messages        = u64::from_be_bytes(stat[p..p+8].try_into().unwrap()); p += 8;
+        let total_bytes           = u64::from_be_bytes(stat[p..p+8].try_into().unwrap()); p += 8;
+        let total_messages_locked = u64::from_be_bytes(stat[p..p+8].try_into().unwrap()); p += 8;
+        let total_bytes_locked    = u64::from_be_bytes(stat[p..p+8].try_into().unwrap());
+        stats.push(QueueStat {
+            queue_name,
+            total_messages,
+            total_bytes,
+            total_messages_locked,
+            total_bytes_locked,
+        });
+    }
+    Ok(stats)
 }
 #[repr(u8)]
 #[derive(Debug, Clone)]
@@ -67,6 +123,7 @@ pub enum Request {
     Requeue = 9,
     UpdateM = 10,
     UpdateQ = 11,
+    NetStats = 12,
 }
 impl Request {
     pub fn from_u8(value: u8) -> Result<Self, std::io::Error> {
@@ -82,6 +139,7 @@ impl Request {
             9 => Ok(Request::Requeue),
             10 => Ok(Request::UpdateM),
             11 => Ok(Request::UpdateQ),
+            12 => Ok(Request::NetStats),
             _ => Err(std::io::Error::new(ErrorKind::InvalidInput, format!("unknown command: {}", value))),
         }
     }
@@ -152,6 +210,7 @@ fn error_code_message(code: u16) -> &'static str {
         102 => "queue already exists",
         103 => "queue does not exist",
         104 => "queue is empty",
+        105 => "failed to get queue stats",
         200 => "payload missing message id",
         201 => "no such message id",
         202 => "message already locked",
