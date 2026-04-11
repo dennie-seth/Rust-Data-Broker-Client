@@ -11,13 +11,16 @@
   - All other commands still return `bytes`.
 
 ### Added
+- `NetStats` command (12) — matches the server's queue statistics command. `send(client, 12, b"", "")` returns `list[QueueStat]`.
+- `QueueStat` Python class with fields `queue_name`, `total_messages`, `total_bytes`, `total_messages_locked`, `total_bytes_locked`.
+- `parse_stats_response()` parses the server's nested stats payload layout: `[4b count u32 BE][{4b stat_len u32 BE}{2b name_len u16 BE}{name}{8b total_messages}{8b total_bytes}{8b total_messages_locked}{8b total_bytes_locked}]*` (counters are 64-bit on the server's supported targets).
 - `UpdateQ` command (11) — matches the server's queue-config update command. Payload is a `NetQueueConfig` binary blob (flags byte + optional `auto_fail` bool + optional `fail_timeout` u64 BE).
 - `MessageMeta` Python class with fields `id`, `publisher_id`, `timestamp`, `locked_by` — parsed from the server's 56-byte Meta format.
 - Client-side parsing of server Meta on Dequeue and ListM responses.
 - `BrokerClient` now carries a `client_id: u128` generated at connect time (system clock based).
 - New request commands mirroring the server: `CreateQ (3)`, `DeleteQ (4)`, `ListM (5)`, `DeleteM (6)`, `Succeeded (7)`, `Failed (8)`, `Requeue (9)`, `UpdateM (10)`.
 - Queue name is null-padded to 64 bytes on the wire as required by the server.
-- `error_code_message()` maps all 18 server error codes (0–303) to human-readable strings.
+- `error_code_message()` maps all 19 server error codes (0–303) to human-readable strings, including `QueueStatsFailed (105)`.
 
 ### Fixed
 - Failed server responses (2-byte big-endian `u16` error codes) are now correctly parsed and mapped to human-readable error messages, instead of being misinterpreted as UTF-8 strings.

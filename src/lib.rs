@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3_asyncio::tokio::init_with_runtime;
 use tokio::runtime::Runtime;
-use crate::net::client::{client_connect, client_send, PyBrokerClient, MessageMeta, parse_list_response, parse_dequeue_response};
+use crate::net::client::{client_connect, client_send, PyBrokerClient, MessageMeta, QueueStat, parse_list_response, parse_dequeue_response, parse_stats_response};
 mod net;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -56,6 +56,18 @@ unsafe fn send<'py>(py: Python<'py>, client: &PyBrokerClient, command: u8, paylo
                                 Err(err) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("dequeue parse failed: {err}"))),
                             }
                         }
+                        // NetStats - return list[QueueStat]
+                        12 => {
+                            match parse_stats_response(&response) {
+                                Ok(stats) => {
+                                    let py_list: Vec<PyObject> = stats.into_iter()
+                                        .map(|s| Py::new(py, s).unwrap().into_py(py))
+                                        .collect();
+                                    Ok(py_list.into_py(py))
+                                }
+                                Err(err) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("stats parse failed: {err}"))),
+                            }
+                        }
                         // Everything else - return raw bytes
                         _ => Ok(response.into_py(py)),
                     }
@@ -70,6 +82,7 @@ fn data_broker_client(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let rt: &'static Runtime = get_runtime();
     let _ = init_with_runtime(rt);
     m.add_class::<MessageMeta>()?;
+    m.add_class::<QueueStat>()?;
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(send, m)?)?;
     Ok(())
